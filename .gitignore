@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+
+# System
+.DS_Store
+
+# IDE
+.vscode/
+
+# PlatformIO
+.pio/
+ESP_driver/.pio/
+
+# Database
+*.db
+
+# Uploads & Generated Content
+web_interface/src/static/uploads/*
+!web_interface/src/static/uploads/.gitkeep
+vision/vision_debug.jpg
+
+# Calibration (local specific)
+vision/homography.json

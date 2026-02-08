@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Climbing Brain</title>
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #eee;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            padding: 20px;
+        }
+        h1 {
+            margin-top: 0;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .card {
+            background: #333;
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+        }
+        .badge {
+            background: #007bff;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            display: inline-block;
+            margin-left: 4px;
+        }
+        input, select, button {
+            padding: 8px 10px;
+            margin: 4px;
+            border-radius: 4px;
+            border: none;
+            font-size: 0.9rem;
+        }
+        input, select {
+            background: #222;
+            color: #eee;
+        }
+        button {
+            cursor: pointer;
+        }
+        .btn-primary {
+            background: #007bff;
+            color: #fff;
+        }
+        .btn-success {
+            background: #28a745;
+            color: #fff;
+        }
+        .btn-danger {
+            background: #dc3545;
+            color: #fff;
+        }
+        .thumb {
+            width: 100%;
+            max-height: 200px;
+            object-fit: cover;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            background: #111;
+        }
+        .toolbar {
+            margin-bottom: 10px;
+        }
+        form.inline {
+            display: inline;
+        }
+    </style>
+</head>
+<body>
+    <p>
+  <a href="{{ url_for('calibrate_form') }}"
+     style="display:inline-block; padding:6px 10px; border-radius:4px;
+            background:#555; color:#fff; text-decoration:none; margin-bottom:10px;">
+    ⚙️ Calibration
+  </a>
+</p>
+    <h1>🧗‍♂️ Climbing Brain</h1>
+
+    <!-- Upload form -->
+    <form action="{{ url_for('upload_route') }}" method="POST" enctype="multipart/form-data" class="toolbar">
+        <input type="file" name="file" accept="image/*" required>
+        <input type="text" name="name" placeholder="Name (auto-generated if empty)">
+        <select name="difficulty">
+            {% for i in range(14) %}
+                <option value="V{{ i }}">V{{ i }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn-success">Upload &amp; Trace</button>
+    </form>
+
+    <hr>
+
+    <!-- Filter/search form -->
+    <form method="GET" class="toolbar">
+        <input type="text" name="name" placeholder="Search by name..." value="{{ request.args.get('name', '') }}">
+        <select name="difficulty">
+            <option value="">All Grades</option>
+            {% for i in range(14) %}
+                <option value="V{{ i }}" {% if request.args.get('difficulty') == 'V' ~ i %}selected{% endif %}>V{{ i }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn-primary">Filter</button>
+    </form>
+
+    <!-- Route grid -->
+    <div class="grid">
+        {% for route in routes %}
+        <div class="card">
+            <div>
+                <strong>{{ route['name'] }}</strong>
+                <span class="badge">{{ route['difficulty'] }}</span>
+            </div>
+            <div style="font-size: 0.8rem; opacity: 0.8; margin-bottom: 6px;">
+                {{ route['created_at'] }}
+            </div>
+
+            <img class="thumb" src="{{ url_for('static', filename='uploads/' ~ route['filename']) }}" alt="{{ route['name'] }}">
+
+            <div style="margin-top: 10px;">
+            <a href="{{ url_for('preview_route', route_id=route['id']) }}"
+            style="padding:6px 10px; border-radius:4px; text-decoration:none; background:#007bff; color:white; display:inline-block;">
+            Preview &amp; Trace
+            </a>                
+            <form action="{{ url_for('delete_route', route_id=route['id']) }}" method="POST" class="inline">
+                    <button type="submit" class="btn-danger"
+                            onclick="return confirm('Delete this route forever?');">
+                        Delete
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html>

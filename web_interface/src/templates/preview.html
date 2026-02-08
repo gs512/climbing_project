@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Preview & Trace — {{ route['name'] }}</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#111; color:#eee; padding:20px; }
+    .container { max-width: 1100px; margin: 0 auto; display:flex; gap:16px; }
+    img { max-width: 100%; height: auto; display:block; border: 1px solid #333; cursor: crosshair; }
+    #overlay { position:absolute; left:0; top:0; pointer-events:none; }
+    .left { flex: 2; position:relative; }
+    .right { flex: 1; max-height: 90vh; overflow-y:auto; }
+    button { padding: 8px 12px; margin:4px; border-radius:6px; border:none; cursor:pointer; }
+    .btn-primary { background:#007bff; color:white; }
+    .btn-secondary { background:#555; color:white; }
+    .point-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; font-size:0.9rem; }
+    select { background:#222; color:#eee; border-radius:4px; border:none; padding:4px; }
+    input[type="text"] { background:#222; color:#eee; border-radius:4px; border:1px solid #444; padding:4px 6px; width:100%; box-sizing:border-box; }
+    label { font-size:0.85rem; color:#ccc; display:block; margin-top:6px; margin-bottom:2px; }
+    .badge { padding:2px 6px; border-radius:4px; font-size:0.75rem; margin-left:4px; }
+    .badge-red { background:#b22222; }
+    .badge-blue { background:#1e90ff; }
+    .badge-green { background:#228b22; }
+    .badge-yellow { background:#b8860b; }
+    .badge-unknown { background:#555; }
+  </style>
+</head>
+<body>
+  <a href="{{ url_for('index') }}" style="color:#ccc; text-decoration:none;">← Back</a>
+  <h1>Preview & Trace — {{ route['name'] }}</h1>
+
+  <div class="container">
+    <div class="left">
+      <img id="routeImg" src="{{ image_url }}" alt="route image">
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="right">
+      <!-- Meta editor -->
+      <div style="margin-bottom:10px; border-bottom:1px solid #333; padding-bottom:8px;">
+        <label for="routeName">Route name</label>
+        <input type="text" id="routeName" value="{{ route['name'] }}">
+        <label for="routeDiff">Grade / difficulty</label>
+        <input type="text" id="routeDiff" value="{{ route['difficulty'] }}">
+        <button id="saveMetaBtn" class="btn-secondary" style="margin-top:6px;">Save meta</button>
+      </div>
+
+      <div style="margin-bottom:8px;">
+        <button id="sendBtn" class="btn-primary">Send to Laser</button>
+        <button id="resetBtn" class="btn-secondary">Reset to saved/detected</button>
+        <button id="clearBtn" class="btn-secondary">Clear all</button>
+      </div>
+      <div id="status" style="margin-bottom:8px; font-size:0.9rem;"></div>
+      <div id="error" style="margin-bottom:8px; color:#f88; font-size:0.9rem;"></div>
+
+      <h3>Points</h3>
+      <div id="pointsList"></div>
+      <p style="font-size:0.8rem; color:#aaa; margin-top:8px;">
+        Tip: click on the board to add points manually. Drag to fine-tune. Use the dropdown to mark start / mid / finish.
+      </p>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const img = document.getElementById('routeImg');
+  const canvas = document.getElementById('overlay');
+  const sendBtn = document.getElementById('sendBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const saveMetaBtn = document.getElementById('saveMetaBtn');
+  const nameInput = document.getElementById('routeName');
+  const diffInput = document.getElementById('routeDiff');
+  const statusEl = document.getElementById('status');
+  const errorEl = document.getElementById('error');
+  const listEl = document.getElementById('pointsList');
+
+  const initialPoints = {{ points_json|safe }};
+  let points = JSON.parse(JSON.stringify(initialPoints)); // deep copy
+  let dragIndex = -1;
+
+  function resizeCanvas() {
+    const rect = img.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+    canvas.style.left = img.offsetLeft + 'px';
+    canvas.style.top = img.offsetTop + 'px';
+    drawOverlay();
+  }
+
+  function naturalToCanvas(p) {
+    return {
+      x: p.x * canvas.width / img.naturalWidth,
+      y: p.y * canvas.height / img.naturalHeight,
+    };
+  }
+
+  function canvasToNatural(cx, cy) {
+    const rect = img.getBoundingClientRect();
+    const x = (cx - rect.left) * (img.naturalWidth / rect.width);
+    const y = (cy - rect.top) * (img.naturalHeight / rect.height);
+    return {x: Math.round(x), y: Math.round(y)};
+  }
+
+  function addPointAtClientPos(clientX, clientY) {
+    const p = canvasToNatural(clientX, clientY);
+    const nextId = points.length ? (Math.max(...points.map(pt => pt.id || 0)) + 1) : 0;
+    points.push({
+      id: nextId,
+      x: p.x,
+      y: p.y,
+      color: 'manual',
+      role: 'mid',
+    });
+    renderList();
+    drawOverlay();
+  }
+
+  function drawOverlay() {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    for (let i=0;i<points.length;i++) {
+      const p = points[i];
+      const c = naturalToCanvas(p);
+      let fill = 'rgba(30,144,255,0.9)'; // mid blue default
+      if (p.role === 'start') fill = 'rgba(220,20,60,0.9)';      // red
+      else if (p.role === 'finish') fill = 'rgba(50,205,50,0.9)';// green
+
+      ctx.fillStyle = fill;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 8, 0, Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = '12px system-ui';
+      ctx.fillText(String(i+1), c.x-4, c.y+4);
+    }
+  }
+
+  function renderList() {
+    listEl.innerHTML = '';
+    if (!points.length) {
+      listEl.textContent = 'No points. Click on the board to add some.';
+      return;
+    }
+    points.forEach((p, idx) => {
+      const row = document.createElement('div');
+      row.className = 'point-row';
+
+      const left = document.createElement('div');
+      const txt = document.createTextNode(`#${idx+1} (${p.x},${p.y}) `);
+      left.appendChild(txt);
+
+      const badge = document.createElement('span');
+      const colorClass = {
+        red: 'badge-red',
+        blue: 'badge-blue',
+        green: 'badge-green',
+        yellow: 'badge-yellow',
+        manual: 'badge-unknown',
+        unknown: 'badge-unknown',
+      }[p.color] || 'badge-unknown';
+      badge.className = 'badge ' + colorClass;
+      badge.textContent = p.color || 'unknown';
+      left.appendChild(badge);
+
+      const roleSel = document.createElement('select');
+      ['start','mid','finish'].forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r;
+        opt.textContent = r;
+        if (p.role === r) opt.selected = true;
+        roleSel.appendChild(opt);
+      });
+      roleSel.onchange = () => {
+        p.role = roleSel.value;
+        drawOverlay();
+      };
+
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '✕';
+      delBtn.className = 'btn-secondary';
+      delBtn.onclick = () => {
+        points.splice(idx, 1);
+        renderList();
+        drawOverlay();
+      };
+
+      const right = document.createElement('div');
+      right.appendChild(roleSel);
+      right.appendChild(delBtn);
+
+      row.appendChild(left);
+      row.appendChild(right);
+      listEl.appendChild(row);
+    });
+  }
+
+  // Dragging logic on canvas
+  canvas.addEventListener('mousedown', (ev) => {
+    const rect = img.getBoundingClientRect();
+    const cx = ev.clientX;
+    const cy = ev.clientY;
+    for (let i=0;i<points.length;i++) {
+      const p = points[i];
+      const screenX = rect.left + (p.x * rect.width / img.naturalWidth);
+      const screenY = rect.top  + (p.y * rect.height / img.naturalHeight);
+      const dx = screenX - cx;
+      const dy = screenY - cy;
+      if (Math.sqrt(dx*dx + dy*dy) < 12) {
+        dragIndex = i;
+        break;
+      }
+    }
+  });
+
+  window.addEventListener('mousemove', (ev) => {
+    if (dragIndex >= 0) {
+      const p = canvasToNatural(ev.clientX, ev.clientY);
+      points[dragIndex].x = p.x;
+      points[dragIndex].y = p.y;
+      renderList();
+      drawOverlay();
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    dragIndex = -1;
+  });
+
+  // Click on image to add a new point
+  img.addEventListener('click', (ev) => {
+    addPointAtClientPos(ev.clientX, ev.clientY);
+    statusEl.textContent = 'Added point; adjust role/position as needed.';
+    errorEl.textContent = '';
+  });
+
+  // Send to laser
+  sendBtn.addEventListener('click', () => {
+    errorEl.textContent = '';
+    statusEl.textContent = '';
+    if (!points.length) {
+      errorEl.textContent = 'No points to send.';
+      return;
+    }
+    const payload = { points: points.map(p => ({x:p.x, y:p.y, role:p.role})) };
+    fetch('{{ url_for("trace_custom_route", route_id=route["id"]) }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => r.json())
+      .then(js => {
+        if (js.ok) {
+          statusEl.textContent = 'Commands sent to ESP.';
+        } else {
+          errorEl.textContent = 'Error: ' + (js.error || 'unknown');
+        }
+      })
+      .catch(err => {
+        errorEl.textContent = 'Network error: ' + String(err);
+      });
+  });
+
+  // Reset back to original detection
+  resetBtn.addEventListener('click', () => {
+    points = JSON.parse(JSON.stringify(initialPoints));
+    statusEl.textContent = 'Reset to original detection.';
+    errorEl.textContent = '';
+    renderList();
+    drawOverlay();
+  });
+
+  // Clear all points
+  clearBtn.addEventListener('click', () => {
+    points = [];
+    renderList();
+    drawOverlay();
+    statusEl.textContent = 'Cleared all points. Click on the board to add new ones.';
+    errorEl.textContent = '';
+  });
+
+  // Save name & difficulty
+  saveMetaBtn.addEventListener('click', () => {
+    errorEl.textContent = '';
+    statusEl.textContent = '';
+    const name = nameInput.value.trim();
+    const difficulty = diffInput.value.trim();
+    if (!name) {
+      errorEl.textContent = 'Name cannot be empty.';
+      return;
+    }
+    const payload = { name, difficulty };
+    fetch('{{ url_for("update_route_meta", route_id=route["id"]) }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => r.json())
+      .then(js => {
+        if (js.ok) {
+          statusEl.textContent = 'Route metadata saved.';
+        } else {
+          errorEl.textContent = 'Save failed: ' + (js.error || 'unknown');
+        }
+      })
+      .catch(err => {
+        errorEl.textContent = 'Network error: ' + String(err);
+      });
+  });
+
+  img.addEventListener('load', () => { resizeCanvas(); });
+  window.addEventListener('resize', () => { resizeCanvas(); });
+  if (img.complete) resizeCanvas();
+
+  // initial render
+  renderList();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Calibrate homography</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#111; color:#eee; padding:20px; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    img { max-width: 100%; height: auto; display:block; border: 1px solid #333; cursor: crosshair; }
+    .toolbar { margin: 12px 0; }
+    button { padding: 8px 12px; margin-right: 6px; border-radius:6px; border:none; cursor:pointer; }
+    .btn { background:#007bff; color:white; }
+    .btn-secondary { background:#555; color:white; }
+    .note { color:#bbb; font-size:0.9rem; margin-top:8px; display:block; }
+    #overlay { position: absolute; left:0; top:0; pointer-events: none; }
+    .coords { margin-top: 10px; font-size: 0.9rem; color:#ddd; }
+    .small { font-size: 0.85rem; color:#aaa; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Calibration — click 4 corners (TL, TR, BR, BL)</h1>
+
+    <div class="toolbar">
+      <button id="resetBtn" class="btn-secondary">Reset</button>
+      <button id="saveBtn" class="btn">Save homography</button>
+      <button id="testBtn" class="btn">Test Draw Preview Points</button>
+      <button id="gridBtn" class="btn">Draw Grid (diagnostic)</button>
+      <span class="note">
+        Click exactly four points in the order: <strong>top-left, top-right, bottom-right, bottom-left</strong>.
+        You can drag points to refine them. A preview is computed automatically when 4 points are set.
+      </span>
+    </div>
+
+    <div style="position:relative; display:inline-block; max-width:100%;">
+      <img id="refImg" src="{{ clean_image_url }}" alt="clean reference image">
+      <canvas id="overlay"></canvas>
+    </div>
+
+    <div class="coords" id="coordsText">Points: none</div>
+    <div id="result" style="margin-top:12px; color:#9f9;"></div>
+    <div id="error" style="margin-top:12px; color:#f99;"></div>
+    <div class="small" style="margin-top:8px;">Note: ensure this clean image is the same used for Boulderbot diffs.</div>
+  </div>
+
+<script>
+(function(){
+  const img = document.getElementById('refImg');
+  const canvas = document.getElementById('overlay');
+  const resetBtn = document.getElementById('resetBtn');
+  const saveBtn = document.getElementById('saveBtn');
+  const testBtn = document.getElementById('testBtn');
+  const gridBtn = document.getElementById('gridBtn');
+  const coordsText = document.getElementById('coordsText');
+  const result = document.getElementById('result');
+  const error = document.getElementById('error');
+
+  let pts = [];              // clicked points [{x,y}]
+  let dragIndex = -1;
+  let preview_pixels = [];   // corners+center pixels from preview
+  let mapped_dac = [];       // DAC coords of clicked pts (from preview)
+  let grid_pixels = [];      // diagnostic grid pixels from /draw_grid
+
+  function resizeCanvasToImage() {
+    const rect = img.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+    canvas.style.left = img.offsetLeft + 'px';
+    canvas.style.top = img.offsetTop + 'px';
+    drawOverlay();
+  }
+
+  function imgToNaturalCoords(clientX, clientY) {
+    const rect = img.getBoundingClientRect();
+    const relX = (clientX - rect.left) * (img.naturalWidth / rect.width);
+    const relY = (clientY - rect.top) * (img.naturalHeight / rect.height);
+    return {x: Math.round(relX), y: Math.round(relY)};
+  }
+
+  function naturalToCanvas(pt) {
+    return {
+      x: pt.x * canvas.width / img.naturalWidth,
+      y: pt.y * canvas.height / img.naturalHeight
+    };
+  }
+
+  function drawOverlay() {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // Draw diagnostic grid (small cyan dots)
+    if (grid_pixels && grid_pixels.length) {
+      ctx.fillStyle = 'rgba(0,200,255,0.8)';
+      for (const gp of grid_pixels) {
+        const c = naturalToCanvas({x: gp[0], y: gp[1]});
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 4, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    // Draw preview pixels (inverse-mapped DAC corners+center) as green crosses
+    if (preview_pixels && preview_pixels.length) {
+      const ctx2 = ctx;
+      ctx2.strokeStyle = 'rgba(0,255,120,0.95)';
+      ctx2.lineWidth = 2;
+      for (const p of preview_pixels) {
+        const c = naturalToCanvas({x: p[0], y: p[1]});
+        ctx2.beginPath();
+        ctx2.moveTo(c.x-8, c.y);
+        ctx2.lineTo(c.x+8, c.y);
+        ctx2.moveTo(c.x, c.y-8);
+        ctx2.lineTo(c.x, c.y+8);
+        ctx2.stroke();
+      }
+    }
+
+    // Draw user points
+    for (let i=0;i<pts.length;i++){
+      const p = pts[i];
+      const c = naturalToCanvas(p);
+      ctx.fillStyle = 'rgba(0,150,255,0.95)';
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 8, 0, Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = 'white';
+      ctx.font = '12px system-ui';
+      ctx.fillText((i+1).toString(), c.x - 4, c.y + 4);
+    }
+  }
+
+  function updateCoordsText() {
+    if (!pts.length) {
+      coordsText.textContent = 'Points: none';
+      return;
+    }
+    coordsText.textContent = 'Points: ' + pts.map((p,i) => `${i+1}:(${p.x},${p.y})`).join('  ');
+  }
+
+  function requestPreview() {
+    if (pts.length !== 4) return;
+    const payload = { points: pts.map(p => [p.x, p.y]) };
+    error.textContent = '';
+    fetch('{{ url_for("calibrate_submit") }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => r.json())
+      .then(js => {
+        if (js.ok) {
+          mapped_dac = js.mapped_dac || [];
+          preview_pixels = js.preview_pixels || [];
+          result.textContent = 'Preview updated.';
+          drawOverlay();
+        } else {
+          error.textContent = 'Preview error: ' + (js.error || 'unknown');
+        }
+      })
+      .catch(err => {
+        error.textContent = 'Network error: ' + String(err);
+      });
+  }
+
+  // Click to add points (max 4)
+  img.addEventListener('click', (ev) => {
+    if (pts.length >= 4) return;
+    const p = imgToNaturalCoords(ev.clientX, ev.clientY);
+    pts.push(p);
+    updateCoordsText();
+    if (pts.length === 4) {
+      requestPreview();
+    }
+    drawOverlay();
+  });
+
+  // Drag points
+  canvas.addEventListener('mousedown', (ev) => {
+    const rect = img.getBoundingClientRect();
+    const cx = ev.clientX, cy = ev.clientY;
+    for (let i=0;i<pts.length;i++){
+      const p = pts[i];
+      const screenX = rect.left + (p.x * rect.width / img.naturalWidth);
+      const screenY = rect.top  + (p.y * rect.height / img.naturalHeight);
+      const dx = screenX - cx, dy = screenY - cy;
+      if (Math.sqrt(dx*dx + dy*dy) < 12) {
+        dragIndex = i;
+        break;
+      }
+    }
+  });
+
+  window.addEventListener('mousemove', (ev) => {
+    if (dragIndex >= 0) {
+      const p = imgToNaturalCoords(ev.clientX, ev.clientY);
+      pts[dragIndex] = p;
+      updateCoordsText();
+      drawOverlay();
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (dragIndex >= 0) {
+      dragIndex = -1;
+      if (pts.length === 4) requestPreview();
+    }
+  });
+
+  resetBtn.addEventListener('click', () => {
+    pts = [];
+    preview_pixels = [];
+    mapped_dac = [];
+    grid_pixels = [];
+    updateCoordsText();
+    result.textContent = '';
+    error.textContent = '';
+    drawOverlay();
+  });
+
+  // Save homography
+  saveBtn.addEventListener('click', () => {
+    error.textContent = '';
+    result.textContent = '';
+    if (pts.length !== 4) {
+      error.textContent = 'Click exactly 4 points before saving.';
+      return;
+    }
+    const payload = { points: pts.map(p => [p.x, p.y]) };
+    fetch('{{ url_for("calibrate_save") }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => r.json())
+      .then(js => {
+        if (js.ok) {
+          mapped_dac = js.mapped_dac || [];
+          preview_pixels = js.preview_pixels || [];
+          result.textContent = 'Homography saved. Mapped DAC: ' + JSON.stringify(mapped_dac);
+          drawOverlay();
+        } else {
+          error.textContent = 'Save error: ' + (js.error || 'unknown');
+        }
+      })
+      .catch(err => {
+        error.textContent = 'Network error: ' + String(err);
+      });
+  });
+
+  // Test draw: use mapped_dac from preview/save
+  testBtn.addEventListener('click', () => {
+    error.textContent = '';
+    result.textContent = '';
+    if (!mapped_dac || !mapped_dac.length) {
+      error.textContent = 'No preview available. Make sure preview ran (4 points selected).';
+      return;
+    }
+    const payload = { mapped_dac: mapped_dac };
+    fetch('{{ url_for("calibrate_test_draw") }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => r.json())
+      .then(js => {
+        if (js.ok) {
+          result.textContent = 'Test draw commands sent to ESP.';
+        } else {
+          error.textContent = 'Test draw failed: ' + (js.error || 'unknown');
+        }
+      })
+      .catch(err => {
+        error.textContent = 'Network error: ' + String(err);
+      });
+  });
+
+  // Draw diagnostic grid using saved homography
+  gridBtn.addEventListener('click', () => {
+    error.textContent = '';
+    result.textContent = '';
+    fetch('{{ url_for("calibrate_draw_grid") }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).then(r => r.json())
+      .then(js => {
+        if (js.ok) {
+          grid_pixels = js.grid_pixels || [];
+          result.textContent = 'Grid draw sent. Check wall for a 4x4 grid; overlay shown here.';
+          drawOverlay();
+        } else {
+          error.textContent = 'Grid draw failed: ' + (js.error || 'unknown');
+        }
+      })
+      .catch(err => {
+        error.textContent = 'Network error: ' + String(err);
+      });
+  });
+
+  // init
+  img.addEventListener('load', () => { resizeCanvasToImage(); });
+  window.addEventListener('resize', () => { resizeCanvasToImage(); });
+  if (img.complete) resizeCanvasToImage();
+})();
+</script>
+</body>
+</html>
