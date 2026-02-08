@@ -1,0 +1,11 @@
+flask
+opencv-python
+numpy
+pyserial
+werkzeug
+
+[dev]
+black
+isort
+flake8
+mypy

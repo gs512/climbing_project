@@ -1,0 +1,10 @@
+pyproject.toml
+climbing_project.egg-info/PKG-INFO
+climbing_project.egg-info/SOURCES.txt
+climbing_project.egg-info/dependency_links.txt
+climbing_project.egg-info/requires.txt
+climbing_project.egg-info/top_level.txt
+vision/__init__.py
+vision/diff_route.py
+vision/homography.py
+web_interface/src/app.py

@@ -25,7 +25,7 @@ from vision.diff_route import (  # type: ignore  # noqa: E402
     detect_and_map_to_laser_with_colors,
     detect_circles_by_diff_with_colors,
 )
-from vision.homography import pixel_to_laser  # type: ignore  # noqa: E402
+from vision.homography import pixel_to_laser, reload_homography  # type: ignore  # noqa: E402
 
 # ---- Flask app ----
 app = Flask(__name__)
@@ -194,6 +194,10 @@ def _save_homography_matrix(h: np.ndarray) -> None:
     with open(HOMOGRAPHY_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f)
     print(f"[calib] Saved homography to {HOMOGRAPHY_JSON_PATH!r}")
+    try:
+        reload_homography()
+    except Exception as exc:
+        print(f"[app] Warning: failed to reload homography: {exc}")
 
 
 def _load_homography_matrix() -> np.ndarray:

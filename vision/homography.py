@@ -70,6 +70,13 @@ def _load_or_create_homography() -> np.ndarray:
 _H = _load_or_create_homography()
 
 
+def reload_homography() -> None:
+    """Reload the homography matrix from disk."""
+    global _H
+    _H = _load_or_create_homography()
+    print("[homography] Matrix reloaded from disk.")
+
+
 def pixel_to_laser(
     pixel_x: float,
     pixel_y: float,

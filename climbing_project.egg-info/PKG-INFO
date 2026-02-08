@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: climbing-project
+Version: 0.1.0
+Summary: Raspberry Pi + ESP32 laser projection system for climbing routes
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: flask
+Requires-Dist: opencv-python
+Requires-Dist: numpy
+Requires-Dist: pyserial
+Requires-Dist: werkzeug
+Provides-Extra: dev
+Requires-Dist: black; extra == "dev"
+Requires-Dist: isort; extra == "dev"
+Requires-Dist: flake8; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
