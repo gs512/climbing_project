@@ -6,7 +6,7 @@ from typing import Dict, List, Sequence, Tuple
 import cv2
 import numpy as np
 import serial  # type: ignore
-from homography import pixel_to_laser
+from vision.homography import pixel_to_laser
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_PATH = os.path.join(_BASE_DIR, "vision_config.json")

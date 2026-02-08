@@ -3,7 +3,7 @@ import time
 
 import cv2
 import serial  # type: ignore
-from homography import pixel_to_laser
+from vision.homography import pixel_to_laser
 from render_upload import detect_holds
 
 # Serial configuration – keep this in sync with render_upload/config
