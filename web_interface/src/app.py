@@ -36,7 +36,7 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
 DB_PATH = os.path.join(BASE_DIR, "routes.db")
 
 # Serial settings
-SERIAL_PORT = "/dev/ttyACM0"
+SERIAL_PORT = os.environ.get("LASER_SERIAL_PORT", "/dev/ttyACM0")
 BAUDRATE = 115200
 _SERIAL_HANDLE: Optional[serial.Serial] = None
 

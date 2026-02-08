@@ -1,8 +1,9 @@
 import serial
 import sys
+import os
 
 # Change to /dev/ttyACM1 if ACM0 doesn't show data
-port = '/dev/ttyACM0' 
+port = os.environ.get("LASER_SERIAL_PORT", '/dev/ttyACM0') 
 baud = 115200
 
 try:

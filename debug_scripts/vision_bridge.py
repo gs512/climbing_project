@@ -7,7 +7,7 @@ from vision.homography import pixel_to_laser
 from render_upload import detect_holds
 
 # Serial configuration – keep this in sync with render_upload/config
-SERIAL_PORT = "/dev/ttyACM0"
+SERIAL_PORT = os.environ.get("LASER_SERIAL_PORT", "/dev/ttyACM0")
 BAUDRATE = 115200
 
 # Camera configuration
