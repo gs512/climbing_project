@@ -20,6 +20,7 @@
 </head>
 <body>
   <div class="container">
+    <a href="{{ url_for('index') }}" style="color:#ccc; text-decoration:none;">← Back</a>
     <h1>Calibration — click 4 corners (TL, TR, BR, BL)</h1>
 
     <div class="toolbar">
@@ -42,6 +43,27 @@
     <div id="result" style="margin-top:12px; color:#9f9;"></div>
     <div id="error" style="margin-top:12px; color:#f99;"></div>
     <div class="small" style="margin-top:8px;">Note: ensure this clean image is the same used for Boulderbot diffs.</div>
+
+    <!-- Manual Control Panel -->
+    <div style="background:#222; padding:15px; margin-top:20px; border:1px solid #444; border-radius:6px;">
+      <h3 style="margin-top:0;">Manual Laser Control</h3>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+        <button onclick="window.setManual(0,0)">TL (0,0)</button>
+        <button onclick="window.setManual(4095,0)">TR (MAX,0)</button>
+        <button onclick="window.setManual(4095,4095)">BR (MAX,MAX)</button>
+        <button onclick="window.setManual(0,4095)">BL (0,MAX)</button>
+        <button onclick="window.setManual(2048,2048)">Center</button>
+      </div>
+      <div style="display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
+        <label>X: <input type="number" id="manualX" value="2048" min="0" max="4095" style="width:70px; padding:4px;"></label>
+        <label>Y: <input type="number" id="manualY" value="2048" min="0" max="4095" style="width:70px; padding:4px;"></label>
+        <label>Step: <input type="number" id="manualStep" value="50" min="1" max="1000" style="width:60px; padding:4px;"></label>
+        <button id="manualGoBtn" class="btn" style="background:#28a745;">Move to XY</button>
+      </div>
+      <div class="small" style="margin-top:8px; color:#aaa;">
+        <strong>Keyboard shortcuts:</strong> Arrow keys to nudge (X/Y). Shift+Arrow for 5x step.
+      </div>
+    </div>
   </div>
 
 <script>
@@ -56,11 +78,88 @@
   const result = document.getElementById('result');
   const error = document.getElementById('error');
 
+  // Manual control elements
+  const manualX = document.getElementById('manualX');
+  const manualY = document.getElementById('manualY');
+  const manualStep = document.getElementById('manualStep');
+  const manualGoBtn = document.getElementById('manualGoBtn');
+
   let pts = [];              // clicked points [{x,y}]
   let dragIndex = -1;
   let preview_pixels = [];   // corners+center pixels from preview
   let mapped_dac = [];       // DAC coords of clicked pts (from preview)
   let grid_pixels = [];      // diagnostic grid pixels from /draw_grid
+
+  // Expose setManual globally for the HTML buttons
+  window.setManual = function(x, y) {
+    manualX.value = x;
+    manualY.value = y;
+    sendManualMove();
+  };
+
+  function sendManualMove() {
+    const x = parseInt(manualX.value, 10);
+    const y = parseInt(manualY.value, 10);
+    
+    // Simple visual feedback on button
+    manualGoBtn.textContent = 'Moving...';
+    
+    fetch('{{ url_for("calibrate_manual") }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x: x, y: y }),
+    }).then(r => r.json())
+      .then(js => {
+        manualGoBtn.textContent = 'Move to XY';
+        if (js.ok) {
+          // Update inputs with clamped values returned from server
+          if (js.x !== undefined) manualX.value = js.x;
+          if (js.y !== undefined) manualY.value = js.y;
+          result.textContent = `Laser moved to (${js.x}, ${js.y})`;
+        } else {
+          error.textContent = 'Manual move failed: ' + (js.error || 'unknown');
+        }
+      })
+      .catch(err => {
+        manualGoBtn.textContent = 'Move to XY';
+        error.textContent = 'Network error: ' + String(err);
+      });
+  }
+
+  // Handle manual Go button
+  manualGoBtn.addEventListener('click', sendManualMove);
+
+  // Handle arrow keys for manual control
+  document.addEventListener('keydown', (e) => {
+    // Only capture arrows if we aren't focused on an input (unless it's the X/Y inputs themselves)
+    const active = document.activeElement;
+    const inputs = [manualX, manualY, manualStep];
+    if (active.tagName === 'INPUT' && !inputs.includes(active)) return;
+
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      e.preventDefault();
+      let step = parseInt(manualStep.value, 10) || 50;
+      if (e.shiftKey) step *= 5;
+
+      let x = parseInt(manualX.value, 10) || 0;
+      let y = parseInt(manualY.value, 10) || 0;
+
+      switch(e.key) {
+        case 'ArrowUp':    y -= step; break; // In DAC space, Y=0 is usually top? Depends on galvo.
+        case 'ArrowDown':  y += step; break;
+        case 'ArrowLeft':  x -= step; break;
+        case 'ArrowRight': x += step; break;
+      }
+
+      // Clamp locally for better UX
+      x = Math.max(0, Math.min(4095, x));
+      y = Math.max(0, Math.min(4095, y));
+
+      manualX.value = x;
+      manualY.value = y;
+      sendManualMove();
+    }
+  });
 
   function resizeCanvasToImage() {
     const rect = img.getBoundingClientRect();

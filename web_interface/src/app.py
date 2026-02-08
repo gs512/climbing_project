@@ -36,7 +36,7 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
 DB_PATH = os.path.join(BASE_DIR, "routes.db")
 
 # Serial settings
-SERIAL_PORT = "/dev/ttyACM0"
+SERIAL_PORT = os.environ.get("LASER_SERIAL_PORT", "/dev/ttyACM0")
 BAUDRATE = 115200
 _SERIAL_HANDLE: Optional[serial.Serial] = None
 
@@ -348,8 +348,6 @@ def preview_route(route_id: int):
     image_path = os.path.join(app.config["UPLOAD_FOLDER"], image_rel)
     saved_points_raw = row["points_json"] if "points_json" in row.keys() else None
 
-    points: List[dict] = []
-
     # Load images for size / scaling
     clean = cv2.imread(CLEAN_IMAGE_PATH)
     route_img = cv2.imread(image_path)
@@ -362,8 +360,10 @@ def preview_route(route_id: int):
     sx = wr / float(wc)
     sy = hr / float(hc)
 
+    points = []
+
+    # 1) Try to use saved points (already in route coords)
     if saved_points_raw:
-        # Use previously saved points (route-space coords)
         try:
             stored = json.loads(saved_points_raw)
             for i, p in enumerate(stored):
@@ -381,11 +381,11 @@ def preview_route(route_id: int):
         except Exception as exc:
             print(f"[app] ERROR parsing saved points_json: {exc}; falling back to detection")
 
+    # 2) If we still have no points, run detection once
     if not points:
-        # No saved points or parse failure → run detection (clean-space coords)
         try:
             detections = detect_circles_by_diff_with_colors(CLEAN_IMAGE_PATH, image_path)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"[app] ERROR detecting route for preview: {exc}")
             detections = []
         for i, (cx_clean, cy_clean, color) in enumerate(detections):
@@ -405,7 +405,7 @@ def preview_route(route_id: int):
         image_url=image_url,
         points_json=points_json,
     )
-
+    
 
 @app.route("/route/<int:route_id>/trace_custom", methods=["POST"])
 def trace_custom_route(route_id: int):
@@ -432,7 +432,6 @@ def trace_custom_route(route_id: int):
         except Exception:
             continue
         filtered_for_send.append({"x": x, "y": y, "role": role})
-        # keep as much as we have (including color etc.) for persistence
         persisted_points.append(
             {
                 "x": x,
@@ -469,13 +468,16 @@ def trace_custom_route(route_id: int):
     hr, wr = route_img.shape[:2]
 
     try:
+        # this is the function we already wrote earlier:
+        #   - scales route coords -> clean
+        #   - maps clean -> DAC via pixel_to_laser
+        #   - applies role->shape/size
         send_shape_cmds_from_roles(filtered_for_send, (wc, hc), (wr, hr))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"[app] ERROR sending custom trace: {exc}")
         return jsonify({"ok": False, "error": str(exc)}), 500
 
     return jsonify({"ok": True})
-
 
 @app.route("/route/<int:route_id>/update_meta", methods=["POST"])
 def update_route_meta(route_id: int):
@@ -613,6 +615,33 @@ def calibrate_draw_grid():
     return jsonify({"ok": True, "grid_pixels": pix, "dac_points": dac_points})
 
 
+@app.route("/calibrate/manual", methods=["POST"])
+def calibrate_manual():
+    """Manually move the laser to a specific X,Y DAC coordinate."""
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"ok": False, "error": "Missing JSON body"}), 400
+
+    try:
+        x = int(payload.get("x", 0))
+        y = int(payload.get("y", 0))
+        # Clamp to 0-4095
+        x = max(0, min(4095, x))
+        y = max(0, min(4095, y))
+
+        ser = get_serial()
+        if ser is None:
+            return jsonify({"ok": False, "error": "No serial available"}), 500
+        
+        # Send 'P' for Point (fallback in ESP firmware)
+        # Format: X,Y,P,1
+        line = f"{x},{y},P,1\n"
+        ser.write(line.encode("ascii"))
+        return jsonify({"ok": True, "x": x, "y": y})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 def _ensure_schema():
     """Create / migrate routes table (adds points_json,img_width,img_height if missing)."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -642,4 +671,4 @@ def _ensure_schema():
 if __name__ == "__main__":
     os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
     _ensure_schema()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=8000, debug=True)

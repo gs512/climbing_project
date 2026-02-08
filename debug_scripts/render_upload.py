@@ -23,7 +23,7 @@ _DEFAULT_CONFIG = {
     "area_range": [150.0, 5000.0],  # min, max contour area
     "circularity_min": 0.7,
     "kernel_size": 5,
-    "serial_port": "/dev/ttyACM0",
+    "serial_port": os.environ.get("LASER_SERIAL_PORT", "/dev/ttyACM0"),
     "baudrate": 115200,
     "dwell_seconds": 1.0,
 }
