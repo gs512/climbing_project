@@ -1,6 +1,9 @@
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
 
 # System
 .DS_Store
