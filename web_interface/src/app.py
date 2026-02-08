@@ -615,6 +615,33 @@ def calibrate_draw_grid():
     return jsonify({"ok": True, "grid_pixels": pix, "dac_points": dac_points})
 
 
+@app.route("/calibrate/manual", methods=["POST"])
+def calibrate_manual():
+    """Manually move the laser to a specific X,Y DAC coordinate."""
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"ok": False, "error": "Missing JSON body"}), 400
+
+    try:
+        x = int(payload.get("x", 0))
+        y = int(payload.get("y", 0))
+        # Clamp to 0-4095
+        x = max(0, min(4095, x))
+        y = max(0, min(4095, y))
+
+        ser = get_serial()
+        if ser is None:
+            return jsonify({"ok": False, "error": "No serial available"}), 500
+        
+        # Send 'P' for Point (fallback in ESP firmware)
+        # Format: X,Y,P,1
+        line = f"{x},{y},P,1\n"
+        ser.write(line.encode("ascii"))
+        return jsonify({"ok": True, "x": x, "y": y})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 def _ensure_schema():
     """Create / migrate routes table (adds points_json,img_width,img_height if missing)."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -644,4 +671,4 @@ def _ensure_schema():
 if __name__ == "__main__":
     os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
     _ensure_schema()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=8000, debug=True)
