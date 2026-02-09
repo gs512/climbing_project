@@ -77,7 +77,23 @@
     </style>
 </head>
 <body>
-    <p>
+    <div style="background:#222; color:#eee; padding:12px; border-radius:8px; margin-bottom:16px;">
+  <h2 style="margin-top:0;">Laser Control</h2>
+  <p id="laserStatus" style="margin:4px 0 8px; font-size:0.9rem;">
+    Status: <span id="laserStateText">unknown</span>
+  </p>
+  <button id="btnArm" style="padding:6px 10px; border-radius:4px; border:none; background:#28a745; color:white; cursor:pointer; margin-right:6px;">
+    ARM
+  </button>
+  <button id="btnDisarm" style="padding:6px 10px; border-radius:4px; border:none; background:#6c757d; color:white; cursor:pointer; margin-right:6px;">
+    DISARM
+  </button>
+  <button id="btnKill" style="padding:6px 10px; border-radius:4px; border:none; background:#dc3545; color:white; cursor:pointer;">
+    KILL
+  </button>
+  <div id="laserMsg" style="margin-top:6px; font-size:0.85rem; color:#ccc;"></div>
+</div>
+<p>
   <a href="{{ url_for('calibrate_form') }}"
      style="display:inline-block; padding:6px 10px; border-radius:4px;
             background:#555; color:#fff; text-decoration:none; margin-bottom:10px;">
@@ -141,5 +157,59 @@
         </div>
         {% endfor %}
     </div>
+<script>
+(function(){
+  const statusSpan = document.getElementById('laserStateText');
+  const msgDiv = document.getElementById('laserMsg');
+  const btnArm = document.getElementById('btnArm');
+  const btnDisarm = document.getElementById('btnDisarm');
+  const btnKill = document.getElementById('btnKill');
+
+  function updateStatus(state, message, isError) {
+    if (state) {
+      statusSpan.textContent = state;
+    }
+    msgDiv.textContent = message || '';
+    msgDiv.style.color = isError ? '#f88' : '#ccc';
+  }
+
+  async function callLaser(endpoint) {
+    try {
+      const resp = await fetch(endpoint, { method: 'POST' });
+      const js = await resp.json();
+      if (js.ok) {
+        updateStatus(js.state, js.message, false);
+      } else {
+        updateStatus(js.state || 'unknown', js.message || 'Error', true);
+      }
+    } catch (err) {
+      updateStatus('unknown', 'Network error: ' + String(err), true);
+    }
+  }
+
+  if (btnArm) {
+    btnArm.addEventListener('click', () => {
+      updateStatus(null, 'Sending ARM...', false);
+      callLaser("{{ url_for('laser_arm') }}");
+    });
+  }
+  if (btnDisarm) {
+    btnDisarm.addEventListener('click', () => {
+      updateStatus(null, 'Sending DISARM...', false);
+      callLaser("{{ url_for('laser_disarm') }}");
+    });
+  }
+  if (btnKill) {
+    btnKill.addEventListener('click', () => {
+      if (!confirm("KILL will immediately stop and clear all queued commands.\nAre you sure?")) return;
+      updateStatus(null, 'Sending KILL...', false);
+      callLaser("{{ url_for('laser_kill') }}");
+    });
+  }
+
+  // initial label
+  updateStatus('disarmed', 'Use ARM before tracing.', false);
+})();
+</script>    
 </body>
 </html>

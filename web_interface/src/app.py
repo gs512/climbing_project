@@ -80,6 +80,49 @@ def get_serial() -> Optional[serial.Serial]:
         _SERIAL_HANDLE = None
     return _SERIAL_HANDLE
 
+# --- Laser safety commands over serial (ARM / DISARM / KILL) ---
+
+def send_laser_command(cmd: str) -> tuple[bool, str]:
+    """
+    Send a plain-text control command to the ESP32 over serial.
+    cmd should be one of: 'ARM', 'DISARM', 'KILL'.
+    Returns (ok, message).
+    """
+    ser = get_serial()
+    if ser is None:
+        return False, "No serial available"
+
+    line = (cmd.strip().upper() + "\n").encode("ascii")
+    try:
+        ser.write(line)
+        ser.flush()
+        print(f"[laser] Sent control command: {cmd}")
+        return True, f"Sent {cmd}"
+    except Exception as exc:  # noqa: BLE001
+        print(f"[laser] ERROR sending {cmd}: {exc}")
+        return False, str(exc)
+
+
+@app.route("/laser/arm", methods=["POST"])
+def laser_arm():
+    ok, msg = send_laser_command("ARM")
+    status_code = 200 if ok else 500
+    return jsonify({"ok": ok, "message": msg, "state": "armed" if ok else "unknown"}), status_code
+
+
+@app.route("/laser/disarm", methods=["POST"])
+def laser_disarm():
+    ok, msg = send_laser_command("DISARM")
+    status_code = 200 if ok else 500
+    return jsonify({"ok": ok, "message": msg, "state": "disarmed" if ok else "unknown"}), status_code
+
+
+@app.route("/laser/kill", methods=["POST"])
+def laser_kill():
+    ok, msg = send_laser_command("KILL")
+    status_code = 200 if ok else 500
+    # KILL implies disarmed
+    return jsonify({"ok": ok, "message": msg, "state": "disarmed" if ok else "unknown"}), status_code
 
 def send_shape_cmds(pts: List[Tuple[int, int, str]], dwell_gap: float = 0.02):
     """

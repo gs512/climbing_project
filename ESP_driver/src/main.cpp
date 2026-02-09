@@ -2,12 +2,31 @@
 #include <Arduino.h>
 #include <vector>
 #include <cstring>
+#include <Adafruit_NeoPixel.h>
 
-#define LASER_CONTROL_PIN 2
+#define NEOPIXEL_PIN 48
+#define NEOPIXEL_COUNT 1
+
+Adafruit_NeoPixel pixel(NEOPIXEL_COUNT, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+
+#define LASER_CONTROL_PIN 18
 static const uint32_t BAUD_RATE = 115200;
 static const uint16_t DAC_MIN = 0;
 static const uint16_t DAC_MAX = 4095;
 static const unsigned long HEARTBEAT_INTERVAL_MS = 1000;
+
+//killswitch 
+// --- Safety timeouts (ms) ---
+static const unsigned long ARM_TIMEOUT_MS      = 10000; // auto-disarm if no commands for 10s
+static const unsigned long MAX_LASER_ON_MS     = 4000;  // hard cap for single continuous ON
+
+// --- Safety state ---
+static bool armed = false;                 // must be true to ever turn laser ON
+static bool laserEnabled = false;          // laser currently ON
+static unsigned long lastCommandTime = 0;  // last time we got a valid command from host
+static unsigned long laserOnSince = 0;     // when we turned laser ON for current draw
+
 
 // Drawing step timing (controls speed)
 static const unsigned long STEP_INTERVAL_MS = 8; // 8 ms between waypoints -> smooth & reasonably fast
@@ -27,7 +46,7 @@ static char lineBuffer[96];
 static size_t linePos = 0;
 
 static unsigned long lastHeartbeat = 0;
-static bool laserState = false;
+static bool ledState = false;
 
 // Command queue
 static Cmd cmdQueue[MAX_CMD_QUEUE];
@@ -45,6 +64,11 @@ static size_t wpCount = 0;
 static size_t wpIndex = 0;
 static unsigned long lastStepTime = 0;
 static bool drawing = false;
+
+void setPixel(uint8_t r, uint8_t g, uint8_t b) {
+    pixel.setPixelColor(0, pixel.Color(r, g, b));
+    pixel.show();
+}
 
 // --- STUB: Replace this with your actual DAC writes ---
 void writeToDAC(uint16_t x, uint16_t y) {
@@ -147,7 +171,6 @@ size_t build_waypoints_cross(uint16_t cx, uint16_t cy, uint16_t diameter) {
 }
 
 void startDrawingFromCmd(const Cmd &c) {
-    // Build waypoints depending on shape
     wpCount = 0;
     wpIndex = 0;
     if (c.shape == 'C') {
@@ -157,13 +180,28 @@ void startDrawingFromCmd(const Cmd &c) {
     } else if (c.shape == 'X') {
         wpCount = build_waypoints_cross(c.x, c.y, c.size);
     } else {
-        // fallback: single point
         waypoints[0].x = c.x;
         waypoints[0].y = c.y;
         wpCount = 1;
     }
-    drawing = (wpCount > 0);
-    lastStepTime = millis();
+
+    if (wpCount > 0) {
+        drawing = true;
+        lastStepTime = millis();
+        if (armed) {
+            digitalWrite(LASER_CONTROL_PIN, HIGH);
+            laserEnabled = true;
+            laserOnSince = millis();
+            setPixel(40, 0, 0); // red during drawing
+        } else {
+            digitalWrite(LASER_CONTROL_PIN, LOW);
+            laserEnabled = false;
+            Serial.println("SAFETY: drawing while DISARMED (mirror-only)");
+            setPixel(0, 0, 40); // blue-ish for mirror-only, if you want
+        }
+    } else {
+        drawing = false;
+    }
 }
 
 void processDrawing() {
@@ -178,6 +216,12 @@ void processDrawing() {
     } else {
         // finished current drawing
         drawing = false;
+        if (laserEnabled) {
+            digitalWrite(LASER_CONTROL_PIN, LOW);
+            laserEnabled = false;
+        }
+        // turn off; heartbeat will resume and blink green in idle
+        setPixel(0, 0, 0);
     }
 }
 
@@ -219,6 +263,31 @@ bool parseLineToCmd(const char *line, Cmd &out) {
     return true;
 }
 
+void disarmLaser() {
+    armed = false;
+    laserEnabled = false;
+    digitalWrite(LASER_CONTROL_PIN, LOW);
+    // Stop any ongoing drawing
+    drawing = false;
+    wpCount = 0;
+    wpIndex = 0;
+    Serial.println("SAFETY: DISARM");
+}
+
+void armLaser() {
+    armed = true;
+    lastCommandTime = millis();
+    Serial.println("SAFETY: ARM");
+}
+
+void killAll() {
+    // Full emergency kill: disarm + clear queue
+    disarmLaser();
+    queueHead = queueTail = 0;
+    queueEmpty = true;
+    Serial.println("SAFETY: KILL - queue cleared");
+}
+
 void handleSerialInput() {
     while (Serial.available() > 0) {
         char c = (char)Serial.read();
@@ -226,15 +295,28 @@ void handleSerialInput() {
         if (c == '\n') {
             lineBuffer[linePos] = '\0';
             if (linePos > 0) {
-                Cmd cmd;
-                if (parseLineToCmd(lineBuffer, cmd)) {
-                    if (!enqueueCmd(cmd)) {
-                        Serial.println("WARN: cmd queue full, dropped cmd");
-                    } else {
-                        Serial.printf("QUEUED %u,%u,%c,%u\r\n", cmd.x, cmd.y, cmd.shape, cmd.size);
-                    }
+                // Record that we heard *something* from host
+                lastCommandTime = millis();
+
+                // 1) Check for safety text commands first
+                if (strcmp(lineBuffer, "ARM") == 0) {
+                    armLaser();
+                } else if (strcmp(lineBuffer, "DISARM") == 0) {
+                    disarmLaser();
+                } else if (strcmp(lineBuffer, "KILL") == 0) {
+                    killAll();
                 } else {
-                    Serial.printf("WARN: invalid cmd '%s'\r\n", lineBuffer);
+                    // 2) Otherwise treat as shape command
+                    Cmd cmd;
+                    if (parseLineToCmd(lineBuffer, cmd)) {
+                        if (!enqueueCmd(cmd)) {
+                            Serial.println("WARN: cmd queue full, dropped cmd");
+                        } else {
+                            Serial.printf("QUEUED %u,%u,%c,%u\r\n", cmd.x, cmd.y, cmd.shape, cmd.size);
+                        }
+                    } else {
+                        Serial.printf("WARN: invalid cmd '%s'\r\n", lineBuffer);
+                    }
                 }
             }
             linePos = 0;
@@ -249,23 +331,55 @@ void handleSerialInput() {
     }
 }
 
-void heartbeat() {
+void safetyWatchdog() {
     unsigned long now = millis();
-    if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
-        lastHeartbeat = now;
-        laserState = !laserState;
-        digitalWrite(LASER_CONTROL_PIN, laserState ? HIGH : LOW);
+
+    // 1) Auto-disarm if armed but no commands for a while
+    if (armed && (now - lastCommandTime > ARM_TIMEOUT_MS)) {
+        Serial.println("SAFETY: auto-disarm due to inactivity");
+        disarmLaser();
+    }
+
+    // 2) Hard cap on laser ON duration (in case drawing logic gets stuck)
+    if (laserEnabled && (now - laserOnSince > MAX_LASER_ON_MS)) {
+        Serial.println("SAFETY: max laser ON time exceeded, forcing OFF");
+        digitalWrite(LASER_CONTROL_PIN, LOW);
+        laserEnabled = false;
+        drawing = false;
+        wpCount = 0;
+        wpIndex = 0;
     }
 }
 
+void heartbeat() {
+    static unsigned long last = 0;
+    static bool on = false;
+
+    if (drawing) return; // no heartbeat during drawing
+
+    unsigned long now = millis();
+    if (now - last > 1000) {
+        last = now;
+        on = !on;
+        if (on) setPixel(0, 40, 0);  // green
+        else    setPixel(0, 0, 0);
+    }
+}
 void setup() {
     pinMode(LASER_CONTROL_PIN, OUTPUT);
-    digitalWrite(LASER_CONTROL_PIN, LOW);
-    Serial.begin(BAUD_RATE);
-    unsigned long start = millis();
-    while (!Serial && (millis() - start) < 3000) {
-        delay(10);
-    }
+    digitalWrite(LASER_CONTROL_PIN, LOW); // laser safe-off
+
+    Serial.begin(115200);
+    delay(200);
+    Serial.println("BOOT: ESP32-S3 laser driver");
+
+    pixel.begin();
+    pixel.setBrightness(40);
+
+    // Boot indicator
+    setPixel(0, 0, 255); // blue
+    delay(300);
+    setPixel(0, 0, 0);
     Serial.println("ESP32 Laser Driver v1 - shape protocol");
 }
 
@@ -284,4 +398,7 @@ void loop() {
 
     // 4) heartbeat
     heartbeat();
+   
+    // 5) safety
+    safetyWatchdog();    
 }
